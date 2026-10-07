@@ -266,6 +266,26 @@ TEST(parallel_render_matches_sequential) {
     CHECK(threw);
 }
 
+TEST(fixups_restore_name_across_sector_boundary) {
+    Bytes raw = blank_entry();
+    std::size_t off = add_attr(raw, 56, 0x10, si_content(FT2020, FT2020, FT2020, FT2020));
+    off = add_attr(raw, off, 0x30, fn_content(std::u16string(200, u'a'), FT2020, FT2020, FT2020, FT2020));
+    put32(raw, off, 0xFFFFFFFF);
+    // The name spans bytes 202..601, so it covers the sector end at 510..511.
+    put16(raw, 4, 48); put16(raw, 6, 3);
+    put16(raw, 48, 0x1234);                         // check value
+    put16(raw, 50, static_cast<std::uint16_t>(raw[510] | (raw[511] << 8)));  // real bytes, sector 1
+    put16(raw, 52, 0);                              // real bytes, sector 2
+    put16(raw, 510, 0x1234); put16(raw, 1022, 0x1234);
+    Entry e = parse_entry(raw.data());
+    CHECK(e.attributes.size() == 2);
+    CHECK(e.attributes[1].name == std::string(200, 'a'));
+
+    put16(raw, 1022, 0x9999);  // wrong check value: record is left alone, no crash
+    Entry torn = parse_entry(raw.data());
+    CHECK(torn.valid);
+}
+
 int main() {
     int failed_tests = 0;
     for (const TestCase& t : registry()) {
