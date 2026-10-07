@@ -1,5 +1,6 @@
 #include "mft.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -147,7 +148,7 @@ const char* kind_name(AttrKind kind) {
     return kind == AttrKind::StandardInformation ? "STANDARD_INFORMATION" : "FILE_NAME";
 }
 
-void parse_entry_into(const std::uint8_t* raw, Entry& e) {
+static void parse_entry_raw(const std::uint8_t* raw, Entry& e) {
     e.attributes.clear();
     e.valid = raw[0] == 'F' && raw[1] == 'I' && raw[2] == 'L' && raw[3] == 'E';
     if (!e.valid) return;
@@ -177,6 +178,41 @@ void parse_entry_into(const std::uint8_t* raw, Entry& e) {
         }
         off += attr_len;
     }
+}
+
+// NTFS replaces the last two bytes of every 512-byte sector with the update sequence
+// number; the real bytes live in the update sequence array. Undo that on a private copy
+// so fields (notably file names) that straddle a sector end are read correctly. If the
+// array is malformed or any sector's check value is wrong, the record is parsed as-is.
+void parse_entry_into(const std::uint8_t* raw, Entry& e) {
+    if (!(raw[0] == 'F' && raw[1] == 'I' && raw[2] == 'L' && raw[3] == 'E')) {
+        parse_entry_raw(raw, e);
+        return;
+    }
+    const std::size_t usa_off = rd16(raw + 4);
+    const std::size_t usa_cnt = rd16(raw + 6);  // includes the check value itself
+    constexpr std::size_t kSector = 512;
+    if (usa_cnt < 2 || usa_cnt - 1 > kEntrySize / kSector || usa_off < 8 ||
+        usa_off + usa_cnt * 2 > kEntrySize) {
+        parse_entry_raw(raw, e);
+        return;
+    }
+    std::uint8_t buf[kEntrySize];
+    std::copy(raw, raw + kEntrySize, buf);
+    const std::uint16_t usn = rd16(raw + usa_off);
+    for (std::size_t i = 1; i < usa_cnt; ++i) {
+        std::uint8_t* tail = buf + i * kSector - 2;
+        if (rd16(tail) != usn) {  // torn or corrupt record: do not trust the array
+            parse_entry_raw(raw, e);
+            return;
+        }
+    }
+    for (std::size_t i = 1; i < usa_cnt; ++i) {
+        std::uint8_t* tail = buf + i * kSector - 2;
+        tail[0] = raw[usa_off + i * 2];
+        tail[1] = raw[usa_off + i * 2 + 1];
+    }
+    parse_entry_raw(buf, e);
 }
 
 Entry parse_entry(const std::uint8_t* raw) {
