@@ -8,3 +8,14 @@ $STANDARD_INFORMATION and $FILE_NAME timestamps.
     ./build/mftparse [-n N] [--format text|csv] [file]   # defaults: MFT.raw, 500 records, text
 
 Text output is byte-identical to the Python tool. -n 0 reads everything.
+
+## Performance
+
+mftparse maps the file (Win32 MapViewOfFile / POSIX mmap), formats records on a worker
+pool and writes the output in file order, so results are identical for any `-t` value.
+Measured on a 12-thread machine with a 205 MB synthetic $MFT (39 MB of text output):
+
+    Python tool            4.4 s
+    C++ v1 (ifstream)      0.78 s
+    C++ mmap, -t 1         0.38 s
+    C++ mmap, -t 12        0.14 s   (~32x the Python tool)

@@ -18,24 +18,10 @@ void usage(std::FILE* to) {
         "usage: mftparse [-n N] [--format text|csv] [file]\n"
         "  file            raw $MFT dump (default: MFT.raw)\n"
         "  -n, --limit N   stop after N records; 0 = all (default: 500, as main.py)\n"
+        "  -t, --threads N worker threads; 0 = all cores (default)\n"
         "  --format        text (default, same layout as the Python tool) or csv\n",
         to);
 }
-
-class Out {
-public:
-    void write(const std::string& s) {
-        buf_ += s;
-        if (buf_.size() >= (1u << 16)) flush();
-    }
-    void flush() {
-        if (!buf_.empty()) std::fwrite(buf_.data(), 1, buf_.size(), stdout);
-        buf_.clear();
-    }
-
-private:
-    std::string buf_;
-};
 
 }  // namespace
 
@@ -45,6 +31,7 @@ int main(int argc, char** argv) {
 #endif
     std::string path = "MFT.raw";
     std::size_t limit = 500;
+    unsigned threads = 0;
     bool csv = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -58,6 +45,14 @@ int main(int argc, char** argv) {
             auto r = std::from_chars(v, v + std::strlen(v), limit);
             if (r.ec != std::errc{} || *r.ptr != '\0') {
                 std::fprintf(stderr, "error: invalid limit '%s'\n", v);
+                return 2;
+            }
+        } else if (a == "-t" || a == "--threads") {
+            if (i + 1 >= argc) { usage(stderr); return 2; }
+            const char* v = argv[++i];
+            auto r = std::from_chars(v, v + std::strlen(v), threads);
+            if (r.ec != std::errc{} || *r.ptr != '\0') {
+                std::fprintf(stderr, "error: invalid thread count '%s'\n", v);
                 return 2;
             }
         } else if (a == "--format") {
@@ -75,27 +70,25 @@ int main(int argc, char** argv) {
         }
     }
 
-    Out out;
     std::size_t count = 0;
     try {
-        if (csv) out.write(mft::csv_header());
-        mft::for_each_item(path, limit, [&](const mft::TimelineItem& it) {
-            ++count;
-            out.write(csv ? mft::format_csv(it) : mft::format_text(it));
+        if (csv) std::fputs(mft::csv_header().c_str(), stdout);
+        count = mft::render_file(path, {csv, limit, threads}, [](const std::string& text) {
+            std::fwrite(text.data(), 1, text.size(), stdout);
         });
     } catch (const mft::FileNotFound&) {
-        out.flush();
+        std::fflush(stdout);
         std::fprintf(stderr,
                      "error: %s not found. Extract the $MFT from an NTFS volume and point "
                      "mftparse at it.\n",
                      path.c_str());
         return 1;
     } catch (const std::exception& e) {
-        out.flush();
+        std::fflush(stdout);
         std::fprintf(stderr, "error building timeline: %s\n", e.what());
         return 1;
     }
-    if (count == 0 && !csv) out.write("[!] No NTFS artifacts found.\n");
-    out.flush();
+    if (count == 0 && !csv) std::fputs("[!] No NTFS artifacts found.\n", stdout);
+    std::fflush(stdout);
     return 0;
 }

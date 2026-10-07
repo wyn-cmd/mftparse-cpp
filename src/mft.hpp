@@ -19,6 +19,7 @@ struct DateTime {
     int year, month, day, hour, minute, second, microsecond;
     // Matches Python's str(datetime): fractional part only when non-zero.
     std::string str() const;
+    void append_to(std::string& out) const;
     bool operator==(const DateTime&) const = default;
 };
 
@@ -69,5 +70,24 @@ std::vector<TimelineItem> build_timeline(const std::string& path, std::size_t li
 std::string format_text(const TimelineItem& item);
 std::string csv_header();
 std::string format_csv(const TimelineItem& item);
+
+// Append-style formatters (no temporary strings); format_text/format_csv wrap these.
+void append_text(std::string& out, const TimelineItem& item);
+void append_csv(std::string& out, const TimelineItem& item);
+
+// Like parse_entry but reuses `out`'s storage.
+void parse_entry_into(const std::uint8_t* raw, Entry& out);
+
+struct RenderOptions {
+    bool csv = false;
+    std::size_t limit = 0;     // 0 = all records
+    unsigned threads = 0;      // 0 = hardware concurrency
+};
+
+// Memory-maps `path`, formats records on a thread pool and passes the text to `sink` in
+// file order. Returns the number of timeline items. Output is identical for any thread
+// count. Throws FileNotFound or std::runtime_error.
+std::size_t render_file(const std::string& path, const RenderOptions& opt,
+                        const std::function<void(const std::string&)>& sink);
 
 }  // namespace mft

@@ -61,31 +61,31 @@ Attribute parse_file_name(const std::uint8_t* c, std::size_t len) {
     return a;
 }
 
-std::string opt_str(const std::optional<DateTime>& dt, const char* none) {
-    return dt ? dt->str() : std::string(none);
-}
-
-std::string csv_field(const std::string& s) {
-    if (s.find_first_of(",\"\r\n") == std::string::npos) return s;
-    std::string out = "\"";
-    for (char ch : s) {
-        if (ch == '"') out.push_back('"');
-        out.push_back(ch);
-    }
-    out.push_back('"');
-    return out;
-}
-
 }  // namespace
 
-std::string DateTime::str() const {
-    char buf[40];
-    const int n = std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d:%02d", year, month,
-                                day, hour, minute, second);
+void DateTime::append_to(std::string& out) const {
+    const auto digit = [](int v) { return static_cast<char>('0' + v); };
+    const auto two = [&](int v) { out.push_back(digit(v / 10)); out.push_back(digit(v % 10)); };
+    out.push_back(digit(year / 1000));
+    out.push_back(digit(year / 100 % 10));
+    out.push_back(digit(year / 10 % 10));
+    out.push_back(digit(year % 10));
+    out.push_back('-'); two(month);
+    out.push_back('-'); two(day);
+    out.push_back(' '); two(hour);
+    out.push_back(':'); two(minute);
+    out.push_back(':'); two(second);
     if (microsecond != 0) {
-        std::snprintf(buf + n, sizeof buf - static_cast<std::size_t>(n), ".%06d", microsecond);
+        out.push_back('.');
+        int div = 100000;
+        for (int i = 0; i < 6; ++i, div /= 10) out.push_back(digit(microsecond / div % 10));
     }
-    return buf;
+}
+
+std::string DateTime::str() const {
+    std::string s;
+    append_to(s);
+    return s;
 }
 
 std::optional<DateTime> filetime_to_dt(std::uint64_t filetime) {
@@ -147,10 +147,10 @@ const char* kind_name(AttrKind kind) {
     return kind == AttrKind::StandardInformation ? "STANDARD_INFORMATION" : "FILE_NAME";
 }
 
-Entry parse_entry(const std::uint8_t* raw) {
-    Entry e;
+void parse_entry_into(const std::uint8_t* raw, Entry& e) {
+    e.attributes.clear();
     e.valid = raw[0] == 'F' && raw[1] == 'I' && raw[2] == 'L' && raw[3] == 'E';
-    if (!e.valid) return e;
+    if (!e.valid) return;
 
     std::uint64_t off = rd16(raw + 20);
     while (off < kEntrySize - 8) {
@@ -177,6 +177,11 @@ Entry parse_entry(const std::uint8_t* raw) {
         }
         off += attr_len;
     }
+}
+
+Entry parse_entry(const std::uint8_t* raw) {
+    Entry e;
+    parse_entry_into(raw, e);
     return e;
 }
 
@@ -216,22 +221,75 @@ std::vector<TimelineItem> build_timeline(const std::string& path, std::size_t li
     return items;
 }
 
+namespace {
+
+void append_opt(std::string& out, const std::optional<DateTime>& dt, const char* none) {
+    if (dt) dt->append_to(out);
+    else out += none;
+}
+
+void append_csv_field(std::string& out, const std::string& s) {
+    if (s.find_first_of(",\"\r\n") == std::string::npos) {
+        out += s;
+        return;
+    }
+    out.push_back('"');
+    for (char ch : s) {
+        if (ch == '"') out.push_back('"');
+        out.push_back(ch);
+    }
+    out.push_back('"');
+}
+
+}  // namespace
+
+void append_text(std::string& out, const TimelineItem& it) {
+    out += "\nEntry #";
+    out += std::to_string(it.entry);
+    out += " (";
+    out += kind_name(it.kind);
+    out += ")\nFile          : ";
+    out += it.file;
+    out += "\nCreated       : ";
+    append_opt(out, it.created, "None");
+    out += "\nModified      : ";
+    append_opt(out, it.modified, "None");
+    out += "\nAccessed      : ";
+    append_opt(out, it.accessed, "None");
+    out += "\nMFT Modified  : ";
+    append_opt(out, it.mft_modified, "None");
+    out += "\n\n";
+}
+
+void append_csv(std::string& out, const TimelineItem& it) {
+    out += std::to_string(it.entry);
+    out.push_back(',');
+    out += kind_name(it.kind);
+    out.push_back(',');
+    append_csv_field(out, it.file);
+    out.push_back(',');
+    append_opt(out, it.created, "");
+    out.push_back(',');
+    append_opt(out, it.modified, "");
+    out.push_back(',');
+    append_opt(out, it.accessed, "");
+    out.push_back(',');
+    append_opt(out, it.mft_modified, "");
+    out.push_back('\n');
+}
+
 std::string format_text(const TimelineItem& it) {
-    std::string s = "\nEntry #" + std::to_string(it.entry) + " (" + kind_name(it.kind) + ")\n";
-    s += "File          : " + it.file + "\n";
-    s += "Created       : " + opt_str(it.created, "None") + "\n";
-    s += "Modified      : " + opt_str(it.modified, "None") + "\n";
-    s += "Accessed      : " + opt_str(it.accessed, "None") + "\n";
-    s += "MFT Modified  : " + opt_str(it.mft_modified, "None") + "\n\n";
+    std::string s;
+    append_text(s, it);
     return s;
 }
 
 std::string csv_header() { return "entry,type,file,created,modified,accessed,mft_modified\n"; }
 
 std::string format_csv(const TimelineItem& it) {
-    return std::to_string(it.entry) + "," + kind_name(it.kind) + "," + csv_field(it.file) + "," +
-           opt_str(it.created, "") + "," + opt_str(it.modified, "") + "," +
-           opt_str(it.accessed, "") + "," + opt_str(it.mft_modified, "") + "\n";
+    std::string s;
+    append_csv(s, it);
+    return s;
 }
 
 }  // namespace mft

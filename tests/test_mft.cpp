@@ -226,6 +226,46 @@ TEST(output_formats) {
     CHECK(format_csv(it) == "7,FILE_NAME,\"a,\"\"b\"\"\",2020-01-01 00:00:00,,,\n");
 }
 
+TEST(parallel_render_matches_sequential) {
+    namespace fs = std::filesystem;
+    const fs::path p = fs::temp_directory_path() / "mftparse_par.raw";
+    {
+        std::ofstream f(p, std::ios::binary);
+        for (int i = 0; i < 1500; ++i) {
+            Bytes e = (i % 7 == 3) ? Bytes(kEntrySize, 0)
+                                   : standard_entry(i % 2 ? u"odd,\"name\"" : u"even");
+            f.write(reinterpret_cast<const char*>(e.data()), static_cast<std::streamsize>(e.size()));
+        }
+        Bytes junk(100, 'J');
+        f.write(reinterpret_cast<const char*>(junk.data()), static_cast<std::streamsize>(junk.size()));
+    }
+    for (bool csv : {false, true}) {
+        for (std::size_t limit : {std::size_t{0}, std::size_t{1}, std::size_t{513}, std::size_t{100000}}) {
+            std::string want;
+            const auto seq = build_timeline(p.string(), limit);
+            for (const auto& it : seq) want += csv ? format_csv(it) : format_text(it);
+            for (unsigned t : {1u, 2u, 5u, 16u}) {
+                std::string got;
+                const std::size_t n = render_file(p.string(), RenderOptions{csv, limit, t},
+                                                  [&](const std::string& s) { got += s; });
+                CHECK(got == want);
+                CHECK(n == seq.size());
+            }
+        }
+    }
+    fs::remove(p);
+
+    const fs::path empty = fs::temp_directory_path() / "mftparse_empty.raw";
+    { std::ofstream f(empty, std::ios::binary); }
+    CHECK(render_file(empty.string(), RenderOptions{}, [](const std::string&) {}) == 0);
+    fs::remove(empty);
+
+    bool threw = false;
+    try { render_file("no_such_file_xyz.raw", RenderOptions{}, [](const std::string&) {}); }
+    catch (const FileNotFound&) { threw = true; }
+    CHECK(threw);
+}
+
 int main() {
     int failed_tests = 0;
     for (const TestCase& t : registry()) {
