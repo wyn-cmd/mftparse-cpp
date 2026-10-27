@@ -19,6 +19,10 @@ std::uint64_t rd64(const std::uint8_t* p) {
     return static_cast<std::uint64_t>(rd32(p)) | (static_cast<std::uint64_t>(rd32(p + 4)) << 32);
 }
 
+bool has_file_magic(const std::uint8_t* p) {
+    return p[0] == 'F' && p[1] == 'I' && p[2] == 'L' && p[3] == 'E';
+}
+
 void append_utf8(std::string& out, std::uint32_t cp) {
     if (cp < 0x80) {
         out.push_back(static_cast<char>(cp));
@@ -150,7 +154,7 @@ const char* kind_name(AttrKind kind) {
 
 static void parse_entry_raw(const std::uint8_t* raw, Entry& e) {
     e.attributes.clear();
-    e.valid = raw[0] == 'F' && raw[1] == 'I' && raw[2] == 'L' && raw[3] == 'E';
+    e.valid = has_file_magic(raw);
     if (!e.valid) return;
 
     std::uint64_t off = rd16(raw + 20);
@@ -185,7 +189,7 @@ static void parse_entry_raw(const std::uint8_t* raw, Entry& e) {
 // so fields (notably file names) that straddle a sector end are read correctly. If the
 // array is malformed or any sector's check value is wrong, the record is parsed as-is.
 void parse_entry_into(const std::uint8_t* raw, Entry& e) {
-    if (!(raw[0] == 'F' && raw[1] == 'I' && raw[2] == 'L' && raw[3] == 'E')) {
+    if (!has_file_magic(raw)) {
         parse_entry_raw(raw, e);
         return;
     }
